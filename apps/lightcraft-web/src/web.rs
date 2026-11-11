@@ -245,6 +245,7 @@ fn services(
         None => Box::new(download),
     };
     Services {
+        start_voice: None,
         local_places: None,
         picker: None,
         pick_display_profile: None,

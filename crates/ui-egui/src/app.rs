@@ -27,6 +27,7 @@ impl LightcraftApp {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
         Self {
+            assistant: crate::assistant::Workspace::default(),
             session,
             ui: UiState::default(),
             services,

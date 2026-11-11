@@ -15,6 +15,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     ..craft_update::suite::LIGHTCRAFT
 };
 
+pub mod assistant;
 pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
@@ -147,6 +148,7 @@ impl QuitPrompt {
 }
 
 pub struct LightcraftApp {
+    pub assistant: assistant::Workspace,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,

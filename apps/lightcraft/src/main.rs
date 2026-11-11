@@ -40,6 +40,8 @@ mod profile_file;
 #[cfg(target_os = "macos")]
 mod screen_profile;
 #[cfg(windows)]
+mod voice;
+#[cfg(windows)]
 mod win_screen_profile;
 mod window_gpu;
 

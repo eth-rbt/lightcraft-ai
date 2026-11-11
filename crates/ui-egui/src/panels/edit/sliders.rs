@@ -26,8 +26,16 @@ pub fn apply_slider_out(
 pub(crate) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool) {
     let Some(spec) = controls::find(id) else { return };
     let v = controls::get(d, id).unwrap_or(spec.default);
-    let out = slider(ui, spec, v, enabled, None);
+    let out = visible_slider(app, ui, spec, v, enabled);
     apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
+}
+
+pub(super) fn visible_slider(app: &LightcraftApp, ui: &mut egui::Ui, spec: &ControlSpec, value: f64, enabled: bool) -> SliderOut {
+    let before = ui.cursor().top();
+    let out = slider(ui, spec, value, enabled, None);
+    let row = egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), before), egui::pos2(ui.max_rect().right(), ui.cursor().top()));
+    crate::assistant::show_control(app, ui, spec.id, row);
+    out
 }
 
 /// Relative temperature scale for rendered (non-raw) files: −100..100 ↔ Kelvin via mired shift.

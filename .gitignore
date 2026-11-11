@@ -6,6 +6,8 @@ plan/
 /corpus
 /log
 .DS_Store
+# Local credentials for the optional creative voice assistant.
+.env
 .claude/
 /craft-fonts
 # nix build / nix develop

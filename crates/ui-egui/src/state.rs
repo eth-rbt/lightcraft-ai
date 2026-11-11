@@ -652,6 +652,7 @@ fn lenient_ids<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D:
 /// than retargeted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GestureFrame {
+    pub(crate) assistant: bool,
     pub(crate) view: crate::state::ViewMode,
     pub(crate) active: Option<lightcraft_catalog::PhotoId>,
     pub(crate) library: u64,
