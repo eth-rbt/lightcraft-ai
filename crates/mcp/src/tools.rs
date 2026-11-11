@@ -334,8 +334,18 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             ),
         ]);
     }
+    for t in &mut v {
+        if !read_only(t["name"].as_str().unwrap_or_default())
+            && let Some(props) = t["inputSchema"]["properties"].as_object_mut()
+        {
+            props.insert("note".into(), json!({"type": "string", "description": NOTE_DOC}));
+        }
+    }
     v
 }
+
+/// What the `note` argument of the editing helpers is for.
+const NOTE_DOC: &str = "One short sentence on why you are making this change. LightCraft shows it to the person next to the step, with what changed.";
 
 /// MCP tool name of a command id (`develop.set` → `cmd_develop_set`).
 pub fn command_tool_name(id: &str) -> String {
@@ -372,7 +382,14 @@ pub fn command_tools(backend: &mut dyn Backend) -> Vec<Value> {
 
 /// Conservative hints: generated command tools may edit; optional output paths make a helper a writer.
 fn annotations(name: &str, title: &str) -> Value {
-    let read_only = matches!(
+    let read_only = read_only(name);
+    json!({"title": title, "readOnlyHint": read_only, "destructiveHint": !read_only,
+        "idempotentHint": read_only || matches!(name, "render_photo" | "screenshot"), "openWorldHint": false})
+}
+
+/// Tools that change nothing in the library or on disk.
+fn read_only(name: &str) -> bool {
+    matches!(
         name,
         "command_list"
             | "list_commands"
@@ -385,9 +402,7 @@ fn annotations(name: &str, title: &str) -> Value {
             | "list_widgets"
             | "ui_inspect"
             | "ui_screenshot"
-    );
-    json!({"title": title, "readOnlyHint": read_only, "destructiveHint": !read_only,
-        "idempotentHint": read_only || matches!(name, "render_photo" | "screenshot"), "openWorldHint": false})
+    )
 }
 
 /// Helpers have fixed keys; generated command tools retain the registry's free-form params.
@@ -595,6 +610,34 @@ fn obj(args: &Value, keys: &[&str]) -> Value {
         }
     }
     Value::Object(m)
+}
+
+/// Whether a call is recorded as an agent step: anything that may edit, except the calls that
+/// read or move through the step log itself (going to a step is not a step).
+fn records_step(name: &str, args: &Value) -> bool {
+    let command = match name {
+        "run_command" => args.get("command").and_then(Value::as_str),
+        "command_run" => args.get("id").and_then(Value::as_str),
+        _ => None,
+    };
+    !read_only(name) && !name.starts_with("cmd_agent_") && !command.is_some_and(|c| c.starts_with("agent."))
+}
+
+/// [`call_tool`] as one agent step: the call is bracketed by `agent.step.begin` / `agent.step.end`,
+/// so the app can show what it changed (`docs/mcp.md` → Agent steps). A helper's `note` argument
+/// goes with the step and is not passed on. The bracket is best effort: an app from before the
+/// step log refuses the two commands, and the tool runs all the same.
+pub fn call_tool_recorded(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
+    if !records_step(name, args) {
+        return call_tool(b, name, args);
+    }
+    let mut args = args.clone();
+    // generated command tools pass their arguments on as the command's own params
+    let note = if name.starts_with(COMMAND_TOOL_PREFIX) { None } else { args.as_object_mut().and_then(|m| m.remove("note")) };
+    let _ = exec(b, "agent.step.begin", json!({"tool": name, "note": note.as_ref().and_then(Value::as_str)}));
+    let result = call_tool(b, name, &args);
+    let _ = exec(b, "agent.step.end", json!({}));
+    result
 }
 
 /// Run one tool.

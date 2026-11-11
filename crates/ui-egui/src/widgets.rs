@@ -413,6 +413,30 @@ fn update_wheel_arming(ui: &mut Ui, id: egui::Id, resp: &egui::Response, row: Re
 /// The radius of a slider's hollow ring thumb.
 const THUMB_RING: f32 = 7.0;
 
+/// The colour of what an agent did (its step bar, its marks on the photo and on sliders), and the
+/// text colour on it.
+pub const AGENT: Color32 = Color32::from_rgb(0xf2, 0xa9, 0x3b);
+pub const AGENT_INK: Color32 = Color32::from_rgb(0x24, 0x18, 0x03);
+
+/// The sliders the agent step on show moved: control id → the value before the step.
+#[derive(Clone, Default)]
+struct AgentMarks(std::sync::Arc<std::collections::BTreeMap<String, f64>>);
+
+fn agent_marks_id() -> egui::Id {
+    egui::Id::unique("lc-agent-marks")
+}
+
+/// Tell this pass's sliders which of them the agent step on show moved, and from where: each
+/// marks itself and its old position ([`slider`]). Set once per pass, before the panels draw.
+pub fn set_agent_marks(ctx: &egui::Context, marks: std::collections::BTreeMap<String, f64>) {
+    ctx.data_mut(|d| d.insert_temp(agent_marks_id(), AgentMarks(std::sync::Arc::new(marks))));
+}
+
+/// The value slider `id` had before the agent step on show, when that step moved it.
+fn agent_mark(ui: &Ui, id: &str) -> Option<f64> {
+    ui.data(|d| d.get_temp::<AgentMarks>(agent_marks_id())).and_then(|m| m.0.get(id).copied())
+}
+
 /// A Lightroom slider row (label + value above a track with a hollow ring thumb).
 /// Double-click the label or thumb to reset (hovering either says so). Shift-drag = fine adjustment.
 /// Scroll sideways over it to nudge it. Click the value to type one: Return or clicking away applies it,
@@ -484,10 +508,21 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     // paint
     let hovered = resp.hovered() || resp.dragged();
     let text_c = if enabled { t.text_label } else { t.text_disabled };
+    // the agent step on show moved this slider: mark the row, and below where the thumb was
+    let agent_from = agent_mark(ui, spec.id).filter(|from| g.differs(*from));
+    if agent_from.is_some() {
+        let mark = row.shrink2(vec2(8.0, 1.0));
+        ui.painter().rect_filled(mark, 4.0, AGENT.gamma_multiply(0.14));
+        ui.painter().rect_stroke(mark, 4.0, Stroke::new(1.0, AGENT.gamma_multiply(0.8)), egui::StrokeKind::Inside);
+        register(ui, format!("agentMark:{}", spec.id), mark);
+    }
     let p = ui.painter();
     p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.font(12.5), text_c);
     if typing.is_none() {
-        p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), t.font(12.5), text_c);
+        let shown = p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), t.font(12.5), text_c);
+        if let Some(from) = agent_from {
+            p.text(shown.left_center() - vec2(6.0, 0.0), Align2::RIGHT_CENTER, format!("{} →", shown_value(spec, from)), t.font(12.5), AGENT);
+        }
         // the scrub pointer, as over Lightroom's values: a drag here changes the value
         if enabled && (value_resp.hovered() || scrub.is_some()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -497,6 +532,10 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let tx = g.to_x(v);
     paint_track(ui, track_rect, &spec.track, &t, tx, ring);
     let p = ui.painter();
+    if let Some(from) = agent_from {
+        let x = g.to_x(from);
+        p.line_segment([pos2(x, track_rect.center().y - 8.0), pos2(x, track_rect.center().y + 8.0)], Stroke::new(2.0, AGENT));
+    }
     let ring_c = if !enabled {
         t.text_disabled
     } else if hovered {

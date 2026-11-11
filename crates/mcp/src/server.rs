@@ -9,7 +9,7 @@ mod progress;
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
-use crate::tools::{ToolResult, call_tool, check_args, doc_inspect, tool_definitions};
+use crate::tools::{ToolResult, call_tool_recorded, check_args, doc_inspect, tool_definitions};
 
 /// The MCP revision we implement.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -187,7 +187,7 @@ impl Server {
                 let hook = if long && !self.backend.has_ui() { self.progress_hook() } else { None };
                 let result = self.guarded(|b| {
                     b.set_progress(hook);
-                    call_tool(b, name, &args)
+                    call_tool_recorded(b, name, &args)
                 });
                 let clear = self.guarded(|b| b.set_progress(None));
                 let result = match (result, clear) {

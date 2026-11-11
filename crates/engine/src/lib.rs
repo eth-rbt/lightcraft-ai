@@ -16,6 +16,7 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+pub mod agent;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
@@ -391,6 +392,8 @@ pub struct Session {
     /// Before/After: the "before" settings chosen per photo (this session; default: the photo's
     /// import state). See `cmd/before.rs`.
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
+    /// What an agent's tool calls changed, one step per call and photo (`agent.*`; this session).
+    pub agent: agent::AgentLog,
     /// File probes from the last import review (`library.importPreview`), reused by the import.
     pub import_probes: std::collections::HashMap<String, media::ProbeInfo>,
     /// The last Synchronize Folder scan, which `folder.synchronize` acts on while it is current
@@ -546,6 +549,7 @@ impl Session {
             keyword_set: None,
             recent_keywords: Vec::new(),
             before: Default::default(),
+            agent: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
             activity: Default::default(),
@@ -702,6 +706,7 @@ impl Session {
                 _ => {}
             }
         }
+        self.agent.observe(&self.catalog, &op);
         let inv = apply(&mut self.catalog, op)?;
         for id in invalidated {
             self.media.forget(id);
@@ -800,6 +805,7 @@ impl Session {
 
     /// Apply without recording undo (interactive previews).
     fn apply_silent(&mut self, op: Op) -> Result<()> {
+        self.agent.observe(&self.catalog, &op);
         self.catalog.apply(op)?;
         Ok(())
     }

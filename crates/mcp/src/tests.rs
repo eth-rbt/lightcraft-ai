@@ -602,3 +602,35 @@ fn render_and_screenshot_pngs_go_through_a_private_folder() {
         folders.push(dir);
     }
 }
+
+/// An editing tool call is one agent step carrying the tool's name and the `note`; the note is
+/// not passed on to the tool, and reading tools and step navigation leave no step.
+#[test]
+fn editing_tool_calls_are_recorded_as_agent_steps() {
+    let mut s = server();
+    let call = |s: &mut Server, id: u64, name: &str, arguments: Value| {
+        let r = rpc(s, id, "tools/call", json!({"name": name, "arguments": arguments}));
+        assert_eq!(r["result"]["isError"], false, "{name}: {r}");
+        r["result"]["structuredContent"].clone()
+    };
+    call(&mut s, 1, "set_develop", json!({"values": {"light.exposure": 0.7}, "note": "The subject is dark."}));
+    call(&mut s, 2, "get_develop", json!({}));
+    call(&mut s, 3, "crop", json!({"rect": [0.1, 0.1, 0.9, 0.9], "note": "Tighter frame."}));
+    let listed = call(&mut s, 4, "run_command", json!({"command": "agent.steps.list"}));
+    let steps = listed["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2, "{listed}");
+    assert_eq!((steps[0]["tool"].as_str(), steps[0]["note"].as_str()), (Some("set_develop"), Some("The subject is dark.")));
+    assert_eq!(steps[0]["changes"][0]["id"], "light.exposure");
+    assert_eq!((steps[1]["tool"].as_str(), steps[1]["note"].as_str()), (Some("crop"), Some("Tighter frame.")));
+    assert!(steps[1]["crop"].is_object());
+
+    // going back to a step is navigation, not a new step
+    call(&mut s, 5, "run_command", json!({"command": "agent.steps.goto", "params": {"step": steps[0]["id"]}}));
+    let listed = call(&mut s, 6, "run_command", json!({"command": "agent.steps.list"}));
+    assert_eq!(listed["steps"].as_array().unwrap().len(), 2);
+    assert_eq!(listed["current"], steps[0]["id"]);
+
+    // a reading tool takes no note
+    let r = rpc(&mut s, 7, "tools/call", json!({"name": "get_develop", "arguments": {"note": "x"}}));
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+}

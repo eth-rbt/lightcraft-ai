@@ -244,6 +244,33 @@ from its raw data without a manual Reload. Headless sessions don't do this on th
 build) → `{checked, updated, cleared}`. Like the app's recheck, it isn't an undo step and keeps
 develop settings and history.
 
+## Agent steps
+
+Every tool call that may edit is recorded as an agent step, so the person can see what the agent did.
+The server brackets the call with `agent.step.begin {tool, note?}` and `agent.step.end`; each photo whose
+develop settings the call changed becomes one step holding the settings before and after. A call that edits
+nothing (a query, a render, a screenshot) leaves no step. The editing helpers (`set_develop`, `crop`,
+`apply_preset`, `run_command`, `command_batch`, …) take an optional `note`: one short sentence on why,
+shown with the step. It is not passed on to the tool. Generated `cmd_*` tools are recorded too, without a note,
+because their arguments are the command's own params.
+
+| Command | Does |
+|---|---|
+| `agent.steps.list {photo?}` | The steps, oldest first: `{id, tool, note, photo, changes: [{id, label, section, from, to, fromText, toText}], crop?, masks?, other}`, plus `current` (the step the active photo's settings are at), `atStart` and `open` |
+| `agent.steps.goto {step, side?}` | Makes the step's photo active and loads the settings the step left (`side: "before"`: the ones it started from). Adds no History step; one undo step. Not recorded as a step |
+| `agent.steps.clear` | Forgets the steps; the photos keep their edits |
+
+In connect mode the desktop app shows them in the Detail view. A bar over the photo names the step the
+photo's settings are at, with the note, and has Back and Advance. That step is drawn on the photo: the
+sliders it moved (listed, and marked in the Edit panel with a tick at the old position), the outline of a
+mask it added or changed, and a diagram of a crop it set. The marks are placed in photo coordinates, so
+they follow the window size, zoom and pan. An edit by the person since leaves the bar without a current
+step; Advance then returns to the agent's latest step. Widgets: `agent:bar`, `agent:back`, `agent:next`,
+`agent:close`, `agent:changes`, `agent:crop`, `agent:mask:<id>`, `agentMark:<control>`.
+
+The log holds the last 500 steps, belongs to the session and is not saved with the library. Headless mode
+records steps the same way (`agent.steps.list` reads them); there is no window to show them in.
+
 ## Resources
 
 `resources/list` / `resources/read` serve JSON snapshots:

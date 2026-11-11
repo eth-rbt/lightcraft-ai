@@ -1544,7 +1544,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Load History step `i` of photo `id` and put the cursor there, without adding a step: the later
 /// steps stay listed (one undo step).
-fn go_to_history_step(s: &mut Session, c: &str, id: PhotoId, i: usize) -> Result<Value> {
+pub(super) fn go_to_history_step(s: &mut Session, c: &str, id: PhotoId, i: usize) -> Result<Value> {
     let ph = s.catalog.photo(id).ok_or_else(|| bad(c, "no photo"))?;
     let st = ph.history.get(i).cloned().ok_or_else(|| bad(c, "no such step"))?;
     let cursor = (i.saturating_add(1) < ph.history.len()).then_some(i);

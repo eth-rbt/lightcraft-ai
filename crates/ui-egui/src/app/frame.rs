@@ -262,6 +262,7 @@ impl LightcraftApp {
             self.cancel_gestures_for_barrier(batch_in_flight, "a modal prompt appeared");
         }
         panels::library_problem::prepare_ui_pass(self, ctx, batch_in_flight);
+        crate::widgets::set_agent_marks(ctx, panels::detail::agent::slider_marks(self));
         let now = self.tick_now();
         // the last pass's time is fine here: this is a UI phase, not a hidden tick
         let t = ctx.input(|i| i.time);

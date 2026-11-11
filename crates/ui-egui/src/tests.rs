@@ -1,4 +1,5 @@
 mod activity;
+mod agent_steps;
 mod album_picker;
 mod album_remove;
 mod alt_preview;

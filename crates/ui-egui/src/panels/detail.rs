@@ -14,6 +14,7 @@ use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom};
 use crate::theme::Tokens;
 use crate::widgets::{register, register_geometry};
 
+pub(crate) mod agent;
 mod crop;
 mod filmstrip;
 mod geometry;
@@ -1095,6 +1096,9 @@ fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter,
         draw_focus_point(&p.with_clip_rect(img_rect.intersect(canvas)), img_rect, o.photo, "canvas:focusPoint");
     }
     transform_grid(app, p, img_rect);
+    if !o.fullscreen {
+        agent::show(app, ui, o.map, canvas, img_rect);
+    }
 }
 
 fn request_stand_in(app: &mut LightcraftApp, id: PhotoId, edge: usize, with_crop: bool) {
