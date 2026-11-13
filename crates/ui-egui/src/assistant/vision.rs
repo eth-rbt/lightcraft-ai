@@ -1,4 +1,4 @@
-//! Bounded, in-memory capture of this editor only. The toolbar and typed feedback are excluded.
+//! Bounded, in-memory capture of this window's editor only, with the island floating over it.
 use base64::Engine as _;
 use egui::{ColorImage, Rect};
 use lightcraft_develop::controls;

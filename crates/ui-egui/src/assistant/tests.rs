@@ -41,7 +41,17 @@ fn logo_opens_tools_and_collapse_keeps_ink_but_restores_editor() {
     let result = h.request("ui.clickWidget", json!({"id": "assistant:logo"}), t);
     assert_eq!(result["ok"], true, "{result}");
     assert!(visible(&h.app));
-    request(&mut h, "assistant.tool", json!({"tool": "pen"}));
+    for _ in 0..4 {
+        h.step();
+    }
+    // it comes up with the pencil out: no mode to pick first, and no box to type in
+    assert!(h.app.assistant.tool == Tool::Pen && drawing(&h.app));
+    let shown = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    assert!(shown(&h, "assistant:pen") && shown(&h, "assistant:logo"));
+    for gone in ["assistant:interact", "assistant:feedback", "assistant:send"] {
+        assert!(!shown(&h, gone), "{gone} is still drawn");
+    }
+    assert!(h.app.run("assistant.tool", json!({"tool": "interact"})).is_err());
     let rect = h.app.image_rect.unwrap();
     let before = h.app.ui.zoom;
     let undo = h.app.session.undo.len();
@@ -281,7 +291,7 @@ fn voice_receives_cropped_editor_images_and_discards_photo_switch_captures() {
     let editor = h.app.assistant.editor_rect.unwrap();
     assert_eq!(width, editor.width().round() as u32);
     assert_eq!(height, editor.height().round() as u32);
-    assert!(height < 900, "the assistant toolbar must be excluded");
+    assert_eq!(height, 900, "the island floats: it takes no room from the editor");
     let context: Value = serde_json::from_str(&context).unwrap();
     assert_eq!(context["photo"], "a.png");
     assert!(context["controls"]["light.exposure"].is_number());
@@ -364,4 +374,32 @@ fn an_outside_voice_opens_the_workspace_and_reports_its_status() {
     assert_eq!(h.app.assistant.transcript, "warm it up a little");
     request(&mut h, "assistant.toggle", json!({"on": false}));
     assert!(!h.app.assistant.expanded);
+}
+
+#[test]
+fn the_island_floats_at_the_top_middle_and_leaves_the_panels_to_the_editor() {
+    let (_fixture, mut h) = demo();
+    let canvas = h.app.canvas_rect.unwrap();
+    request(&mut h, "assistant.toggle", json!({}));
+    assert_eq!(h.app.canvas_rect, Some(canvas), "opening the island must not move the photo");
+    let rect = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap();
+    let (first, last) = (rect(&h, "assistant:logo"), rect(&h, "assistant:clear"));
+    assert!(first.top() < 60.0, "{first:?}");
+    assert!(((first.left() + last.right()) / 2.0 - 700.0).abs() < 12.0, "centred in the 1400 px window: {first:?} {last:?}");
+    assert!(first.left() > 300.0 && last.right() < 1100.0, "an island, not a bar across the window");
+    // a section header in the Edit panel still answers a click while the pencil is out
+    let open = h.app.ui.section_open("color");
+    let result = h.request("ui.clickWidget", json!({"id": "section:color"}), Duration::from_secs(20));
+    assert_eq!(result["ok"], true, "{result}");
+    assert_ne!(h.app.ui.section_open("color"), open);
+    assert!(h.app.assistant.ink().is_none_or(|ink| ink.marks.is_empty()), "a click on a panel draws nothing");
+    // a press on the island chooses a tool and leaves no mark under it
+    let result = h.request("ui.clickWidget", json!({"id": "assistant:eraser"}), Duration::from_secs(20));
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(h.app.assistant.tool == Tool::Eraser);
+    assert!(h.app.assistant.ink().is_none_or(|ink| ink.marks.is_empty()));
+    // closing and opening again brings the pencil back
+    request(&mut h, "assistant.toggle", json!({}));
+    request(&mut h, "assistant.toggle", json!({}));
+    assert!(h.app.assistant.tool == Tool::Pen);
 }

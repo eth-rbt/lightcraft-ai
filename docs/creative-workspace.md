@@ -1,15 +1,19 @@
 # Creative workspace
 
-Open a photo and click **Lc** to reveal the creative toolbar. Opening it starts the
-voice assistant on Windows; clicking Lc again closes the toolbar, hides annotations,
-stops the microphone and returns to the regular editor. **Pause voice** stops the
-connection while keeping the drawing tools open.
+Open a photo and click **Lc** to drop the creative island down: a small dark pill at the
+top middle of the window, floating over the editor without moving it. Opening it starts the
+voice assistant on Windows; clicking Lc on the island closes it, hides annotations,
+stops the microphone and returns to the regular editor. **Pause voice** (shown where the
+app has its own voice) stops the connection while keeping the drawing tools open.
 
-The toolbar provides Pencil, Highlight, whole-stroke Eraser, Text, four ink colours,
-four pencil widths, and separate annotation Undo/Redo/Clear controls. Choose
-**Edit photo** to use the normal sliders and filmstrip. Drawing mode captures input
-over the editor so a stroke cannot accidentally move a photo slider. Escape returns
-to Edit photo; Ctrl/Cmd+Z and Shift+Ctrl/Cmd+Z undo/redo ink while drawing.
+The island provides Pencil, Highlight, whole-stroke Eraser, Text, four ink colours,
+four pencil widths, and separate annotation Undo/Redo/Clear controls. It always comes
+up with the Pencil: there is no mode to switch on. The pencil owns the pointer over the
+photo's view only, so a stroke cannot pan or zoom the photo, while the sliders, panels,
+filmstrip and menus around it work as usual; close the island to pan or zoom by hand.
+With the pointer over the photo, Ctrl/Cmd+Z and Shift+Ctrl/Cmd+Z undo/redo ink; elsewhere
+they are the editor's own Undo and Redo. The line under the tools shows what the voice is
+doing and the words it heard or spoke back. There is no box to type in.
 
 Marks belong to the active photo in its library. Switching photos hides the previous
 photo's marks; returning restores them. Coordinates follow the displayed photo when
@@ -23,11 +27,11 @@ On macOS the voice and the model live outside the app, in
 drives LightCraft through every MCP tool. Speech is transcribed on the machine (Whisper) and the reply is
 read by the system voice, so no audio leaves it.
 
-- **Tap the right Option key** (in any app) to open this toolbar and the microphone; tap again to close
+- **Tap the right Option key** (in any app) to open the island and the microphone; tap again to close
   both and return to the regular editor.
-- **Hold it**, speak, and let go to talk to the agent. Holding it with the toolbar closed opens it first.
+- **Hold it**, speak, and let go to talk to the agent. Holding it with the island closed opens it first.
   Holding it while the agent is answering interrupts the answer.
-- The line under the toolbar says what the voice is doing and shows what it heard, then the reply.
+- The line in the island says what the voice is doing and shows what it heard, then the reply.
 - The drawing tools are yours to click as usual. The model sees your marks when it takes a screenshot of
   the window, so you can circle something and say "fix this".
 
@@ -37,9 +41,9 @@ another (up to eight, about 3.6 seconds in all). The edit itself has already bee
 step per tool call, so the replay changes nothing; any key, click or edit of yours ends it. The sliders a
 step moved stay marked with their old value until the next edit.
 
-The server reaches the toolbar through two UI commands: `assistant.toggle {on}` opens or closes it
+The server reaches the island through two UI commands: `assistant.toggle {on}` opens or closes it
 without flipping a state it cannot see, and `assistant.status {status?, transcript?, error?}` sets its
-status line. The Send box and Pause voice button belong to the Windows voice below and do nothing here.
+status line. The Pause voice button belongs to the Windows voice below and is not shown here.
 
 ## Spoken editing on Windows
 
@@ -57,9 +61,8 @@ catalog. Drawing works without a key. Native voice is currently Windows-only;
 the web and other desktop platforms retain drawing tools.
 
 While connected, microphone audio and cropped images of this editor are sent to the
-provider. The toolbar and typed draft are excluded from images; a submitted text
-message is sent as feedback. No other application or desktop is captured. Closing
-the toolbar stops sharing. Switching photos restarts the conversation so a tool call
+provider. The island floats over the editor, so it appears in those images. No other
+application or desktop is captured. Closing the island stops sharing. Switching photos restarts the conversation so a tool call
 for the previous picture cannot act on the new picture.
 
 Ask for an adjustment, such as “raise the exposure a little,” or ask the assistant to
@@ -70,7 +73,7 @@ moves it over about 1.2 seconds. The displayed photo changes through the usual
 non-destructive develop pipeline. One adjustment creates one photo undo step, and
 Auto Sync does not spread it to other selected photos.
 
-Speak, type and send feedback, or use the editor to interrupt a running adjustment.
+Speak, or use the editor, to interrupt a running adjustment.
 The slider stops at the current value, allowing a new instruction to change course.
 The model receives a fresh editor image and current control values before continuing.
 Normal photo Undo reverses its edits. The assistant cannot delete, import, export,
@@ -85,8 +88,9 @@ need verification on the user's setup.
 ## Implementation and control channel
 
 UI commands: `assistant.toggle` (`on`: ask for a state), `assistant.status`, `assistant.voice`, `assistant.tool` (`tool` is
-`interact`, `pen`, `highlighter`, `eraser` or `text`), `assistant.undo`,
-`assistant.redo`, `assistant.clear`, `assistant.send` (`text`) and `assistant.stop`.
+`pen`, `highlighter`, `eraser` or `text`), `assistant.undo`,
+`assistant.redo`, `assistant.clear`, `assistant.send` (`text`: feedback for a connected voice; the
+island has no box for it) and `assistant.stop`.
 The logo widget is `assistant:logo`; tool widgets use `assistant:<tool>`.
 These use the existing JSON-lines control channel and menu command routing.
 

@@ -1,4 +1,4 @@
-//! A spoken creative workspace above the editor. The host supplies audio/networking; this
+//! A spoken creative workspace: an island of drawing tools that drops down over the editor. The host supplies audio/networking; this
 //! module owns photo-bound ink and applies visible, interruptible edits through normal commands.
 
 mod ink;
@@ -21,7 +21,7 @@ use crate::{
     state::{RightPanel, ViewMode},
 };
 pub use ink::{Ink, Mark};
-pub use ui::{draw_editor, logo, overlay, toolbar};
+pub use ui::{begin, draw_editor, logo, overlay};
 
 pub enum VoiceInput {
     Frame { data_url: String, revision: u64, context: String },
@@ -55,7 +55,6 @@ pub type StartVoice = Box<dyn Fn(egui::Context) -> Result<VoiceConnection, Strin
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tool {
     #[default]
-    Interact,
     Pen,
     Highlighter,
     Eraser,
@@ -134,7 +133,6 @@ pub struct Workspace {
     pub color: [u8; 4],
     pub width: f32,
     pub note: String,
-    pub text: String,
     pub status: String,
     pub error: Option<String>,
     pub transcript: String,
@@ -144,6 +142,8 @@ pub struct Workspace {
     pub documents: BTreeMap<(u64, u64), Ink>,
     pub pending: Option<Mark>,
     pub editor_rect: Option<Rect>,
+    /// The widget that takes strokes over the photo, so its own drag is told from a slider's.
+    overlay_id: Option<egui::Id>,
     pub photo_rect: Option<Rect>,
     pub voice: Option<VoiceConnection>,
     /// Show the agent step bar (Back / Advance and the step's marks) over the photo. Off: a step
@@ -166,11 +166,10 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             expanded: false,
-            tool: Tool::Interact,
+            tool: Tool::Pen,
             color: [57, 123, 119, 255],
             width: 4.0,
             note: "Note".into(),
-            text: String::new(),
             status: "Voice off".into(),
             error: None,
             transcript: String::new(),
@@ -180,6 +179,7 @@ impl Default for Workspace {
             documents: BTreeMap::new(),
             pending: None,
             editor_rect: None,
+            overlay_id: None,
             photo_rect: None,
             voice: None,
             step_bar: false,
@@ -231,8 +231,9 @@ fn blocked(app: &LightcraftApp) -> bool {
         || crate::dialogs::updates_ui::blocks_input(app)
 }
 
+/// The pencil is out whenever the workspace is: there is no separate mode to switch it on.
 pub fn drawing(app: &LightcraftApp) -> bool {
-    visible(app) && !blocked(app) && app.assistant.tool != Tool::Interact
+    visible(app) && !blocked(app)
 }
 
 fn reply(app: &mut LightcraftApp, call_id: String, result: Value) {
@@ -322,7 +323,6 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
                 stop_voice(app);
                 app.assistant.expanded = false;
                 app.assistant.voice_wanted = false;
-                app.assistant.tool = Tool::Interact;
                 app.assistant.pending = None;
             } else {
                 if app.session.active().is_none() {
@@ -330,6 +330,8 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
                 }
                 app.ui.view = ViewMode::Detail;
                 app.assistant.expanded = true;
+                // it always comes up with the pencil, whatever tool it was closed on
+                app.assistant.tool = Tool::Pen;
                 app.assistant.voice_wanted = true;
                 app.assistant.attempted = false;
                 app.assistant.photo = identity(app);
@@ -350,7 +352,6 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
         }
         "assistant.tool" => {
             let tool = match p.get("tool").and_then(Value::as_str) {
-                Some("interact") => Tool::Interact,
                 Some("pen") => Tool::Pen,
                 Some("highlighter") => Tool::Highlighter,
                 Some("eraser") => Tool::Eraser,
@@ -376,7 +377,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
             }
             app.assistant.changed();
         }
-        // What an outside voice (tools/lightcraft-chat) is doing, for the line under the toolbar.
+        // What an outside voice (tools/lightcraft-chat) is doing, for the line in the island.
         "assistant.status" => {
             let text = |key: &str, max: usize| p.get(key).and_then(Value::as_str).map(|t| t.chars().take(max).collect::<String>());
             if let Some(status) = text("status", 80) {
@@ -393,14 +394,13 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
             app.assistant.voice_wanted = false;
         }
         "assistant.send" => {
-            let text = p.get("text").and_then(Value::as_str).unwrap_or(&app.assistant.text).trim().to_string();
+            let text = p.get("text").and_then(Value::as_str).unwrap_or_default().trim().to_string();
             if text.is_empty() || text.len() > 4000 {
                 return Err("Enter a message of up to 4,000 characters".into());
             }
             interrupt(app);
             let voice = app.assistant.voice.as_ref().ok_or("Voice is not connected. Reconnect to send feedback.")?;
             voice.commands.try_send(VoiceInput::Text(text)).map_err(|_| "Voice is busy. Try sending again.")?;
-            app.assistant.text.clear();
         }
         _ => return Err("Unknown creative workspace command".into()),
     }
@@ -494,7 +494,6 @@ fn begin_edit(app: &mut LightcraftApp, call_id: String, revision: u64, control: 
     let auto_sync = app.session.auto_sync;
     app.session.auto_sync = false;
     app.ui.dragging_control = Some(control.clone());
-    app.assistant.tool = Tool::Interact;
     app.assistant.action = format!("{}  {} → {}", spec.label, spec.format(from), spec.format(target));
     app.assistant.edit = Some(Edit { auto_sync, call_id, photo, control, from, target, elapsed: 0.0, last: now });
     Ok(())
@@ -711,18 +710,18 @@ pub fn shortcuts(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     if !drawing(app) || ctx.egui_wants_keyboard_input() {
         return false;
     }
-    let command = ctx.input(|i| {
-        if i.key_pressed(egui::Key::Escape) {
-            Some(("assistant.tool", json!({"tool": "interact"})))
-        } else if i.modifiers.command && i.key_pressed(egui::Key::Z) {
-            Some((if i.modifiers.shift { "assistant.redo" } else { "assistant.undo" }, json!({})))
-        } else {
-            None
-        }
-    });
-    if let Some((id, p)) = command {
-        let _ = app.run(id, p);
+    if app.assistant.pending.is_some() {
+        // no editor shortcut fires in the middle of a stroke
+        return true;
     }
+    // Undo belongs to the ink while the pointer is on the photo and there is ink to undo;
+    // everywhere else, and for every other key, the editor's own shortcuts apply.
+    let Some(redo) = ctx.input(|i| (i.modifiers.command && i.key_pressed(egui::Key::Z)).then_some(i.modifiers.shift)) else { return false };
+    let possible = app.assistant.ink().is_some_and(|ink| if redo { ink.can_redo() } else { ink.can_undo() });
+    if !possible || !ui::capturing(app, ctx) {
+        return false;
+    }
+    let _ = app.run(if redo { "assistant.redo" } else { "assistant.undo" }, json!({}));
     true
 }
 

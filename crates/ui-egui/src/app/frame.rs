@@ -472,7 +472,7 @@ impl LightcraftApp {
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
         // right panels and left panel run to the bottom; the bottom bar sits between them).
-        crate::assistant::toolbar(self, ui);
+        crate::assistant::begin(self, ui);
         crate::assistant::draw_editor(self, ui, |app, ui| {
             panels::topbar::show(app, ui);
             panels::library_problem::banner(app, ui);
