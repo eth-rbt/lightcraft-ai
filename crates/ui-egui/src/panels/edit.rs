@@ -225,9 +225,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, "wb.temp", true);
             control(app, ui, d, "wb.tint", true);
         } else {
-            let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
+            let out = sliders::visible_slider(app, ui, &REL_TEMP, k_to_rel(d.wb.temp), true);
             apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
-            let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
+            let out = sliders::visible_slider(app, ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true);
             apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
         }
         control(app, ui, d, "color.vibrance", true);

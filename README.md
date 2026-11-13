@@ -80,6 +80,10 @@
 
 ## Edit like you mean it
 
+The [creative workspace](docs/creative-workspace.md) adds photo-bound annotations and
+a Windows voice assistant that visibly moves editing controls. Click **Lc** to open
+or collapse it; speak or type feedback while it edits.
+
 LightCraft is a complete darkroom in a single native app. Every adjustment is **non-destructive**, so your originals
 are never touched. Every slider renders through a **scene-referred, wide-gamut, 32-bit float pipeline**: highlights
 roll off like film, shadows open up without halos, and colour stays clean from capture to export.
@@ -333,8 +337,9 @@ lightcraft --control 7980 ~/Pictures/trip
   through a shoot takes ~50 ms per photo.
 - **Background rendering.** A worker pool renders the loupe, before/after and every visible thumbnail off the UI
   thread: drafts during drags, full quality on release.
-- **Local-first.** No account, no cloud, no telemetry, no subscription. Your catalog is an append-only log of
-  human-readable operations you can diff, back up or replay.
+- **Local-first editing.** Your catalog is an append-only log of human-readable operations you can diff,
+  back up or replay, with no account required. The optional creative voice workspace uses a paid cloud API
+  and shares microphone audio and this editor's view only while connected; see its [setup and privacy notes](docs/creative-workspace.md).
 
 <br>
 

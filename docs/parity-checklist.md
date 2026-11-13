@@ -23,6 +23,10 @@ cited here still exists. Formerly docs/parity.md.
 
 ## Summary
 
+The [creative workspace](creative-workspace.md) is an extension beyond Lightroom:
+collapsible tools, photo-bound annotations and interruptible voice-driven edits.
+It is tracked separately and does not change the parity counts below.
+
 <!-- parity:summary -->
 | Section | ✅ | 🟡 | ⬜ | 🚫 | P0 done | P1 done |
 |---|---:|---:|---:|---:|---:|---:|

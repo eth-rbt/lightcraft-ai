@@ -58,6 +58,14 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
 }
 
 pub const UI_COMMANDS: &[UiCommand] = &[
+    ("assistant.toggle", "Creative Tools and Voice", None, "Window"),
+    ("assistant.voice", "Pause or Reconnect Voice", None, ""),
+    ("assistant.tool", "Choose Annotation Tool", None, ""),
+    ("assistant.undo", "Undo Annotation", None, ""),
+    ("assistant.redo", "Redo Annotation", None, ""),
+    ("assistant.clear", "Clear Photo Annotations", None, ""),
+    ("assistant.send", "Send Assistant Feedback", None, ""),
+    ("assistant.stop", "Stop Assistant", None, ""),
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
     ("view.photoGrid", "Photo Grid", None, "View"),

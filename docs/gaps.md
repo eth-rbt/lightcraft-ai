@@ -11,6 +11,10 @@ and [ROADMAP.md](../ROADMAP.md) if they move.
 Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app-parity.md#how-hours-are-calibrated)).
 `B` marks a gap that blocks **beta**.
 
+The [creative workspace](creative-workspace.md) is a separate extension, outside these
+Lightroom gaps. Its current limits are Windows-only native voice, session-local ink,
+and no native acoustic echo cancellation; it does not close a parity gap.
+
 ## Ranked
 
 | # | Gap | Evidence | User impact | Hours | Doc |

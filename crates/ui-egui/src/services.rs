@@ -51,6 +51,8 @@ pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
 pub struct Services {
+    /// Native voice and vision session, opened only by the creative workspace's logo.
+    pub start_voice: Option<crate::assistant::StartVoice>,
     /// Local's built-in places as (label, path). None uses the host's home folder.
     pub local_places: Option<Vec<(String, String)>>,
     /// Native file dialogs for commands, shown off the UI thread and answered later

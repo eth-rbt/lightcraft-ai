@@ -11,6 +11,10 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let _ = DIALOG_PARENT.set(rfd::FileDialog::new().set_parent(cc));
     Services {
+        #[cfg(windows)]
+        start_voice: Some(Box::new(crate::voice::start)),
+        #[cfg(not(windows))]
+        start_voice: None,
         local_places: None,
         // Commands' file dialogs run on their own thread (#191): a dialog on the UI thread
         // stopped the window answering the compositor, which then reported the app as hung.

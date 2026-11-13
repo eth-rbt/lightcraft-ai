@@ -37,6 +37,7 @@ impl LightcraftApp {
     /// The navigation/document/modal/panel state that decides what an automation id means.
     fn gesture_frame(&self) -> GestureFrame {
         GestureFrame {
+            assistant: crate::assistant::visible(self),
             view: self.ui.view,
             active: self.session.active(),
             library: self.session.library_generation(),

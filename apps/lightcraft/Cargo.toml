@@ -57,6 +57,12 @@ objc2-foundation = { workspace = true }
 lightcraft-testkit = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+cpal = "0.15.3" # Apache-2.0: native microphone and speaker streams
+tungstenite = { version = "0.27", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+base64 = "0.22"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+webpki-roots = "1"
 craft-update = { workspace = true }
 # the colour profile of the monitor showing the window (`win_screen_profile`)
 lightcraft-wincolor = { workspace = true }

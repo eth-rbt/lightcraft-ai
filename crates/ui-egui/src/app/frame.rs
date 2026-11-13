@@ -291,6 +291,7 @@ impl LightcraftApp {
         // Recent-library checks and launch-list keys read focus/time/keys: they belong to the UI
         // phase, not the hidden-capable `logic` tick (plan §4.5 / migration input contract).
         panels::library_problem::logic(self, ctx);
+        crate::assistant::tick(self, ctx);
         if self.fonts_ready && !updates_ui::blocks_input(self) {
             shortcuts::handle(self, ctx);
         }
@@ -471,13 +472,16 @@ impl LightcraftApp {
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
         // right panels and left panel run to the bottom; the bottom bar sits between them).
-        panels::topbar::show(self, ui);
-        panels::library_problem::banner(self, ui);
-        panels::strip::show(self, ui);
-        // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
-        let chrome = theme::Tokens::get(&ctx).chrome;
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        crate::assistant::toolbar(self, ui);
+        crate::assistant::draw_editor(self, ui, |app, ui| {
+            panels::topbar::show(app, ui);
+            panels::library_problem::banner(app, ui);
+            panels::strip::show(app, ui);
+            let chrome = theme::Tokens::get(ui.ctx()).chrome;
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(app, ui));
+        });
         self.lights_out(&ctx);
+        crate::assistant::overlay(self, &ctx);
         panels::second::show(self, &ctx);
         if notice_blocks {
             panels::notices::restore_prompt_pointer(self, &ctx);
