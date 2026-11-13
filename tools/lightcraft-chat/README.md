@@ -50,8 +50,8 @@ Reset clears the conversation and restarts the LightCraft process.
 The **right Option** key works in any app, so you can stay in LightCraft. The chat page does not have
 to be open.
 
-- **Tap** it: agent mode turns on. LightCraft shows its creative toolbar (annotation tools and a status
-  line) and the microphone opens. Tap again: the toolbar goes away and the microphone closes.
+- **Tap** it: agent mode turns on. LightCraft drops down its creative island (annotation tools and a status
+  line) and the microphone opens. Tap again: the island goes away and the microphone closes.
 - **Hold** it, speak, and let go: your words are sent as a normal message and the reply is read aloud.
   Holding it outside agent mode turns agent mode on first.
 - Holding it while a reply is being read or worked on interrupts that reply.
@@ -62,8 +62,8 @@ machine: no audio leaves it. The words you said, as text, go to Claude like a ty
 ```
 talk key (tools/talk-key.swift) -> server: tap = agent mode, hold = talk
 microphone (ffmpeg) -> whisper-cli -> text -> the same turn a typed message gets
-reply text -> say (the macOS system voice)
-LightCraft: assistant.toggle shows the toolbar, assistant.status its status line
+reply text -> tools/speak.swift (the macOS system voice, kept running)
+LightCraft: assistant.toggle shows the island, assistant.status its status line
 ```
 
 Set up once:
@@ -79,7 +79,7 @@ curl -L -o models/ggml-small.en.bin https://huggingface.co/ggerganov/whisper.cpp
   Settings > Privacy & Security and restart that app. The key helper only listens, and only for modifier
   keys, so it never sees what you type. Without Input Monitoring the key still works while the chat page
   is focused, and so does its "Hold to talk" button.
-- **The toolbar** needs the chat to drive the running app
+- **The island** needs the chat to drive the running app
   (`LIGHTCRAFT_MCP_ARGS=mcp --connect 127.0.0.1:7980 --compact`) with a photo open. Voice works without it.
 - **What you see in LightCraft.** Each edit the model makes is replayed on the real sliders: the slider
   is highlighted and travels from its old value to the new one
@@ -92,4 +92,7 @@ curl -L -o models/ggml-small.en.bin https://huggingface.co/ggerganov/whisper.cpp
   another model or binary. The default model is English only. `VOICE_INPUT` is the ffmpeg input
   (default `-f avfoundation -i :default`, the system's input device). `GLOBAL_TALK_KEY=off` turns the
   key helper off.
-- The voice is the system voice (`say`). macOS only.
+- The voice is the system voice, the one chosen under System Settings > Accessibility > Spoken Content.
+  A small helper (`tools/speak.swift`, built on first run) stays running so a sentence starts at once;
+  if it cannot be built, `say` is used and each sentence starts about a second late. macOS only.
+- The terminal prints where each spoken turn's time went, a line per stage, in seconds since the key was let go.

@@ -188,9 +188,24 @@ async function runTurn(request: ChatRequest, send: (event: PageEvent) => void, s
   }
 }
 
+// Where a spoken turn's time goes: one line per stage on the terminal, in seconds since the key was let go.
+let voiceStart = 0; // 0 outside a spoken turn, so typed turns print nothing
+
+function timing(label: string, since = voiceStart): void {
+  if (since === 0) return;
+  console.log(`voice ${((performance.now() - since) / 1000).toFixed(2).padStart(6)}s  ${label}`);
+}
+
+function seconds(since: number): string {
+  return `${((performance.now() - since) / 1000).toFixed(2)}s`;
+}
+
 async function runSteps(anthropic: Anthropic, send: (event: PageEvent) => void, signal: AbortSignal): Promise<void> {
   for (let step = 0; step < MAX_STEPS; step++) {
     if (signal.aborted) return;
+    const sent = performance.now();
+    let waiting = true; // for the first words of this request
+    timing(`request ${step + 1}: sent`);
     const stream = anthropic.messages.stream(
       {
         model: MODEL,
@@ -202,8 +217,17 @@ async function runSteps(anthropic: Anthropic, send: (event: PageEvent) => void, 
       },
       { signal },
     );
-    stream.on("text", (delta) => send({ type: "text", delta }));
+    stream.once("streamEvent", () => timing(`request ${step + 1}: first byte after ${seconds(sent)}`));
+    stream.on("text", (delta) => {
+      if (waiting) timing(`request ${step + 1}: first text after ${seconds(sent)}`);
+      waiting = false;
+      send({ type: "text", delta });
+    });
     const message = await stream.finalMessage();
+    timing(
+      `request ${step + 1}: done after ${seconds(sent)} (${message.stop_reason}, ` +
+        `${message.usage.output_tokens} tokens out, ${message.usage.cache_read_input_tokens ?? 0} cached in)`,
+    );
 
     if (message.stop_reason === "refusal") {
       send({ type: "notice", text: "The model declined this request." });
@@ -223,11 +247,13 @@ async function runSteps(anthropic: Anthropic, send: (event: PageEvent) => void, 
     for (const call of calls) {
       send({ type: "tool_call", id: call.id, name: call.name, input: call.input });
       let result: McpToolResult;
+      const called = performance.now();
       try {
         result = await mcp.callTool(call.name, call.input);
       } catch (error) {
         result = { content: [{ type: "text", text: describeError(error) }], isError: true };
       }
+      timing(`tool ${call.name}: ${seconds(called)}`);
       send({
         type: "tool_result",
         id: call.id,
@@ -244,7 +270,9 @@ async function runSteps(anthropic: Anthropic, send: (event: PageEvent) => void, 
     }
     messages.push({ role: "user", content: results });
 
+    const rendering = performance.now();
     const preview = await currentPreview();
+    timing(`preview for the page: ${seconds(rendering)}`);
     if (preview) send({ type: "preview", image: preview });
   }
   send({ type: "notice", text: `Stopped after ${MAX_STEPS} steps. Say "continue" to carry on.` });
@@ -254,6 +282,8 @@ async function runSteps(anthropic: Anthropic, send: (event: PageEvent) => void, 
 // A tap turns agent mode on or off (LightCraft's toolbar, and the microphone); holding it is talking.
 const TALK_KEY_SOURCE = path.join(ROOT, "tools", "talk-key.swift");
 const TALK_KEY_BIN = path.join(ROOT, "bin", "talk-key");
+const SPEAK_SOURCE = path.join(ROOT, "tools", "speak.swift");
+const SPEAK_BIN = path.join(ROOT, "bin", "speak");
 const TALK_KEY_HELPER = process.env.TALK_KEY_HELPER; // another program printing the same lines; skips the build
 const pages: ServerResponse[] = []; // open /api/events streams
 let talkKey: ChildProcess | null = null;
@@ -355,29 +385,87 @@ class Microphone {
   }
 }
 
-/** Reads the reply aloud with the system voice (`say`), a sentence at a time as it streams. */
+/** Reads the reply aloud with the system voice, a sentence at a time as it streams. */
 class Speaker {
-  private queue: string[] = [];
   private unspoken = "";
+  // The helper that stays running (tools/speak.swift), and the sentences it has not finished.
+  private helper: ChildProcess | null = null;
+  private pending = new Map<string, { text: string; turn: number }>();
+  private nextId = 0;
+  // Without the helper: one `say` per sentence, each about a second late.
+  private queue: string[] = [];
   private child: ChildProcess | null = null;
+
+  /** Start the helper, building it first if needed. Until it says "ready", and if it cannot run, `say` is used. */
+  async start(): Promise<void> {
+    if (process.platform !== "darwin") return;
+    try {
+      await buildHelper(SPEAK_SOURCE, SPEAK_BIN);
+    } catch (error) {
+      console.error(`Speech starts late: could not build tools/speak.swift (${describeError(error)}).`);
+      return;
+    }
+    // Its stdin stays open to this process, and it exits when that closes.
+    const child = spawn(SPEAK_BIN, [], { stdio: ["pipe", "pipe", "inherit"] });
+    child.on("error", (error) => console.error(`Speech starts late: ${error.message}`));
+    child.stdin?.on("error", () => {});
+    child.on("exit", () => {
+      if (this.helper === child) this.helper = null;
+      this.pending.clear();
+    });
+    if (child.stdout) createInterface({ input: child.stdout }).on("line", (line) => this.onHelper(child, line));
+  }
+
+  private onHelper(child: ChildProcess, line: string): void {
+    if (line === "ready") this.helper = child;
+    const [event, id] = line.split(" ");
+    const sentence = id ? this.pending.get(id) : undefined;
+    if (!id || !sentence) return;
+    if (event === "start") timing(`speaking: "${shorten(sentence.text)}"`, sentence.turn);
+    if (event === "end") this.pending.delete(id);
+  }
+
+  private get idle(): boolean {
+    return this.pending.size === 0 && !this.child && this.queue.length === 0;
+  }
 
   /** Queue the finished sentences of streamed text; `all` also queues the unfinished rest. */
   feed(delta: string, all = false): void {
     this.unspoken += delta;
     let cut = all ? this.unspoken.length : 0;
     if (!all) for (const match of this.unspoken.matchAll(/[.!?:]\s|\n/g)) cut = match.index + match[0].length;
+    // Nothing is being said yet: start on the first clause instead of waiting for the whole sentence.
+    if (!all && cut === 0 && this.idle) {
+      const clause = /[,;]\s|\s[–—]\s/.exec(this.unspoken);
+      if (clause && clause.index >= 8) cut = clause.index + clause[0].length;
+    }
     const ready = this.unspoken.slice(0, cut).trim();
     this.unspoken = this.unspoken.slice(cut);
     if (!/[\p{L}\p{N}]/u.test(ready)) return;
+    if (this.helper?.stdin?.writable) {
+      const id = String(++this.nextId);
+      this.pending.set(id, { text: ready, turn: voiceStart });
+      this.helper.stdin.write(`say ${id} ${ready.replace(/\s+/g, " ")}\n`);
+      return;
+    }
     this.queue.push(ready);
     this.next();
   }
 
   stop(): void {
-    this.queue = [];
     this.unspoken = "";
+    this.pending.clear();
+    if (this.helper?.stdin?.writable) this.helper.stdin.write("stop\n");
+    this.queue = [];
     this.child?.kill();
     this.child = null;
+  }
+
+  /** On the way out: the helper too. */
+  close(): void {
+    this.stop();
+    this.helper?.kill();
+    this.helper = null;
   }
 
   private next(): void {
@@ -385,6 +473,7 @@ class Speaker {
     if (text === undefined) return;
     // The text goes in on stdin, so a reply that starts with "-" is not read as an option.
     const child = spawn("say", [], { stdio: ["pipe", "ignore", "ignore"] });
+    timing(`starting say (heard about a second later): "${shorten(text)}"`);
     this.child = child;
     child.on("error", () => {});
     child.on("exit", () => {
@@ -393,6 +482,10 @@ class Speaker {
     });
     child.stdin?.end(text);
   }
+}
+
+function shorten(text: string): string {
+  return text.length > 50 ? `${text.slice(0, 50)}…` : text;
 }
 
 const mic = new Microphone();
@@ -494,14 +587,19 @@ async function endTalking(): Promise<void> {
   const wav = mic.end();
   sound("Pop");
   if (wav.length - 44 < 0.3 * BYTES_PER_SECOND) return showStatus(READY);
+  voiceStart = performance.now();
+  timing(`key released, ${((wav.length - 44) / BYTES_PER_SECOND).toFixed(1)}s of audio`);
   showStatus("Transcribing…");
   let text: string;
   try {
     text = await transcribe(wav);
+    timing(`transcribed: "${text}"`);
   } catch (error) {
+    voiceStart = 0;
     broadcast({ type: "error", message: `Voice: ${describeError(error)}` });
     return showStatus(READY, { error: describeError(error) });
   }
+  if (talking || !agentMode || !text) voiceStart = 0; // no turn follows
   if (talking || !agentMode) return;
   if (!text) return showStatus("Didn't catch that. Hold the key and speak");
   await voiceTurn(text);
@@ -510,10 +608,14 @@ async function endTalking(): Promise<void> {
 /** A spoken message: the same turn a typed one gets, shown on every page and read aloud. */
 async function voiceTurn(text: string): Promise<void> {
   // A reply that was just interrupted may still be finishing a tool call.
+  const started = voiceStart;
   for (let tries = 0; busy && tries < 50; tries++) await sleep(300);
+  voiceStart = 0;
   if (talking || !agentMode) return;
   if (busy) return showStatus(READY, { error: "The last request is still running. Try again in a moment." });
   busy = true;
+  voiceStart = started; // the interrupted turn cleared it when it ended
+  timing("turn started");
   const abort = new AbortController();
   current = abort;
   broadcast({ type: "user", text });
@@ -541,6 +643,8 @@ async function voiceTurn(text: string): Promise<void> {
   } finally {
     busy = false;
     if (current === abort) current = null;
+    timing(failure ? `turn failed: ${failure}` : abort.signal.aborted ? "turn interrupted" : "turn done");
+    voiceStart = 0; // sentences still queued are read out, but no longer timed
     broadcast({ type: "done" });
     if (agentMode && !talking) showStatus(READY, { transcript: said.trim() || text, error: failure });
   }
@@ -567,16 +671,20 @@ function onTalkKey(line: string): void {
   }
 }
 
+/** Compiles a Swift helper when its source is newer than what was built. */
+async function buildHelper(source: string, bin: string): Promise<void> {
+  const written = await stat(source);
+  const built = await stat(bin).catch(() => null);
+  if (built && built.mtimeMs >= written.mtimeMs) return;
+  await mkdir(path.dirname(bin), { recursive: true });
+  await run("swiftc", ["-O", source, "-o", bin]);
+}
+
 async function startTalkKey(): Promise<void> {
   if (process.platform !== "darwin" || process.env.GLOBAL_TALK_KEY === "off") return;
   if (!TALK_KEY_HELPER) {
     try {
-      const source = await stat(TALK_KEY_SOURCE);
-      const built = await stat(TALK_KEY_BIN).catch(() => null);
-      if (!built || built.mtimeMs < source.mtimeMs) {
-        await mkdir(path.dirname(TALK_KEY_BIN), { recursive: true });
-        await run("swiftc", ["-O", TALK_KEY_SOURCE, "-o", TALK_KEY_BIN]);
-      }
+      await buildHelper(TALK_KEY_SOURCE, TALK_KEY_BIN);
     } catch (error) {
       console.error(`Global talk key is off: could not build tools/talk-key.swift (${describeError(error)}).`);
       return;
@@ -744,12 +852,13 @@ createServer((req, res) => {
 }).listen(PORT, "127.0.0.1", () => {
   console.log(`LightCraft chat: http://localhost:${PORT}  (model ${MODEL}, ${tools.length} tools)`);
   void startTalkKey();
+  void speaker.start();
 });
 
 process.on("SIGINT", () => {
   talkKey?.kill();
   mic.close();
-  speaker.stop();
+  speaker.close();
   mcp.close();
   process.exit(0);
 });
