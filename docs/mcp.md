@@ -260,7 +260,12 @@ because their arguments are the command's own params.
 | `agent.steps.goto {step, side?}` | Makes the step's photo active and loads the settings the step left (`side: "before"`: the ones it started from). Adds no History step; one undo step. Not recorded as a step |
 | `agent.steps.clear` | Forgets the steps; the photos keep their edits |
 
-In connect mode the desktop app shows them in the Detail view. A bar over the photo names the step the
+In connect mode the desktop app replays each new step of the photo on show in the Edit panel: every
+slider the step moved is highlighted in turn and drawn travelling from its old value to the one it has
+now, and stays marked with a tick at the old position. The replay edits nothing
+([creative workspace](creative-workspace.md)).
+
+The step bar is off by default (`assistant.step_bar` in the UI crate). When on, a bar over the photo names the step the
 photo's settings are at, with the note, and has Back and Advance. That step is drawn on the photo: the
 sliders it moved (listed, and marked in the Edit panel with a tick at the old position), the outline of a
 mask it added or changed, and a diagram of a crop it set. The marks are placed in photo coordinates, so

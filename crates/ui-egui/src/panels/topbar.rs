@@ -73,9 +73,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if !crate::assistant::visible(app) {
-            crate::assistant::logo(app, ui);
-        }
         if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, crate::i18n::tr("Show/hide My Photos panel"))
             .clicked()
         {
@@ -91,6 +88,13 @@ fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
             ui.add_space(10.0);
             let room = search_left - ui.cursor().left() - 16.0;
             crate::menubar::show_in_window(app, ui, room);
+        }
+        // The creative workspace's switch comes after the buttons and menus, and only where it
+        // fits: it must not move them or push a menu off a narrow window (Window ▸ Creative Tools
+        // and Voice opens the workspace too).
+        if !crate::assistant::visible(app) && search_left - ui.cursor().left() - 16.0 >= 44.0 {
+            ui.add_space(6.0);
+            crate::assistant::logo(app, ui);
         }
     });
 }

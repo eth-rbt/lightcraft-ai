@@ -16,7 +16,32 @@ photo's marks; returning restores them. Coordinates follow the displayed photo w
 it is zoomed or resized. Annotations are session-local: closing the app discards them.
 They are discussion aids and are not written into originals or photo exports.
 
-## Spoken editing
+## Agent mode on macOS
+
+On macOS the voice and the model live outside the app, in
+[`tools/lightcraft-chat`](../tools/lightcraft-chat/README.md): a small local server that calls Claude and
+drives LightCraft through every MCP tool. Speech is transcribed on the machine (Whisper) and the reply is
+read by the system voice, so no audio leaves it.
+
+- **Tap the right Option key** (in any app) to open this toolbar and the microphone; tap again to close
+  both and return to the regular editor.
+- **Hold it**, speak, and let go to talk to the agent. Holding it with the toolbar closed opens it first.
+  Holding it while the agent is answering interrupts the answer.
+- The line under the toolbar says what the voice is doing and shows what it heard, then the reply.
+- The drawing tools are yours to click as usual. The model sees your marks when it takes a screenshot of
+  the window, so you can circle something and say "fix this".
+
+Each edit the agent makes is replayed on the real sliders: the Edit panel opens the slider's section,
+highlights the slider and draws it travelling from its old value to the new one, one slider after
+another (up to eight, about 3.6 seconds in all). The edit itself has already been applied, as one undo
+step per tool call, so the replay changes nothing; any key, click or edit of yours ends it. The sliders a
+step moved stay marked with their old value until the next edit.
+
+The server reaches the toolbar through two UI commands: `assistant.toggle {on}` opens or closes it
+without flipping a state it cannot see, and `assistant.status {status?, transcript?, error?}` sets its
+status line. The Send box and Pause voice button belong to the Windows voice below and do nothing here.
+
+## Spoken editing on Windows
 
 The Windows desktop app uses native microphone/speaker audio and the OpenAI Realtime
 API, with the education assistant's default model and voice. Add
@@ -59,7 +84,7 @@ need verification on the user's setup.
 
 ## Implementation and control channel
 
-UI commands: `assistant.toggle`, `assistant.voice`, `assistant.tool` (`tool` is
+UI commands: `assistant.toggle` (`on`: ask for a state), `assistant.status`, `assistant.voice`, `assistant.tool` (`tool` is
 `interact`, `pen`, `highlighter`, `eraser` or `text`), `assistant.undo`,
 `assistant.redo`, `assistant.clear`, `assistant.send` (`text`) and `assistant.stop`.
 The logo widget is `assistant:logo`; tool widgets use `assistant:<tool>`.

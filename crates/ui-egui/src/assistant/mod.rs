@@ -557,7 +557,8 @@ fn advance_replay(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let now = ctx.input(|i| i.time);
-    replay.elapsed += (now - replay.last).clamp(0.0, 0.08);
+    // a slow frame may skip ahead a little, so a window that is drawn rarely still finishes on time
+    replay.elapsed += (now - replay.last).clamp(0.0, 0.25);
     replay.last = now;
     let index = (replay.elapsed / replay.per) as usize;
     let Some((control, from, to)) = replay.items.get(index) else {
@@ -733,9 +734,7 @@ pub fn show_control(app: &LightcraftApp, ui: &mut egui::Ui, control: &str, row: 
         "wb.tintRel" => "wb.tint",
         other => other,
     };
-    let replayed = replaying(app)
-        .and_then(|(index, _)| app.assistant.replay.as_ref()?.items.get(index))
-        .is_some_and(|(id, ..)| id == shown);
+    let replayed = replaying(app).and_then(|(index, _)| app.assistant.replay.as_ref()?.items.get(index)).is_some_and(|(id, ..)| id == shown);
     if replayed || app.assistant.edit.as_ref().is_some_and(|edit| edit.control == shown) {
         ui.scroll_to_rect(row, Some(egui::Align::Center));
         ui.painter().rect_stroke(row.shrink(3.0), 4.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(57, 123, 119)), egui::StrokeKind::Inside);

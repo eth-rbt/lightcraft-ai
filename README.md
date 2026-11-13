@@ -81,8 +81,10 @@
 ## Edit like you mean it
 
 The [creative workspace](docs/creative-workspace.md) adds photo-bound annotations and
-a Windows voice assistant that visibly moves editing controls. Click **Lc** to open
-or collapse it; speak or type feedback while it edits.
+a voice assistant whose edits are shown on the real editing controls. Click **Lc** to open
+or collapse it. On Windows the voice is built in; on macOS it comes from
+[`tools/lightcraft-chat`](tools/lightcraft-chat/README.md), with speech handled on the machine:
+tap the right Option key for agent mode, hold it to talk.
 
 LightCraft is a complete darkroom in a single native app. Every adjustment is **non-destructive**, so your originals
 are never touched. Every slider renders through a **scene-referred, wide-gamut, 32-bit float pipeline**: highlights

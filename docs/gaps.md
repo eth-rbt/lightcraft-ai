@@ -12,7 +12,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 `B` marks a gap that blocks **beta**.
 
 The [creative workspace](creative-workspace.md) is a separate extension, outside these
-Lightroom gaps. Its current limits are Windows-only native voice, session-local ink,
+Lightroom gaps. Its current limits are voice built in on Windows only (macOS uses the lightcraft-chat tool), session-local ink,
 and no native acoustic echo cancellation; it does not close a parity gap.
 
 ## Ranked

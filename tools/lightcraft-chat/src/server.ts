@@ -26,7 +26,13 @@ const VIEW_SIDE = 1024; // long edge of images shown to the model and the page
 // Voice: speech is transcribed on this machine by whisper.cpp; nothing is sent to a speech service.
 const WHISPER_CLI = process.env.WHISPER_CLI ?? "whisper-cli";
 const WHISPER_MODEL = path.resolve(ROOT, process.env.WHISPER_MODEL ?? "models/ggml-small.en.bin");
-const MAX_AUDIO_BYTES = 16 * 1024 * 1024; // about 8 minutes of 16 kHz mono WAV
+/** ffmpeg input options for the microphone (macOS: the system's default input device). */
+const VOICE_INPUT = (process.env.VOICE_INPUT ?? "-f avfoundation -i :default").split(/\s+/).filter(Boolean);
+const BYTES_PER_SECOND = 32_000; // 16 kHz mono 16-bit, which is what Whisper reads
+const MAX_UTTERANCE_BYTES = 5 * 60 * BYTES_PER_SECOND;
+const HOLD_MS = 250; // the talk key held this long is talking; let go sooner, it is a tap
+const PRE_ROLL_MS = 150; // audio kept from just before the key went down
+const READY = "Hold right Option to talk";
 /** Words Whisper should expect, so "dehaze" is not heard as "the haze". */
 const WHISPER_PROMPT =
   "LightCraft photo editing: exposure, contrast, highlights, shadows, whites, blacks, temperature, tint, " +
@@ -63,11 +69,18 @@ interface ChatRequest {
   voice?: boolean;
 }
 
+/** One message to every open page: voice turns start on the server, so no page asked for them. */
+type Broadcast =
+  | PageEvent
+  | { type: "user"; text: string }
+  | { type: "voice"; state: string; agentMode: boolean };
+
 let mcp: McpClient;
 let tools: Anthropic.Tool[] = [];
 let system = "";
 let messages: Anthropic.MessageParam[] = [];
 let busy = false;
+let current: AbortController | null = null; // the reply in progress, typed or spoken
 
 async function startLightcraft(): Promise<void> {
   mcp = await McpClient.start(CLI, CLI_ARGS);
@@ -237,13 +250,301 @@ async function runSteps(anthropic: Anthropic, send: (event: PageEvent) => void, 
   send({ type: "notice", text: `Stopped after ${MAX_STEPS} steps. Say "continue" to carry on.` });
 }
 
-// The global talk key: a small macOS helper reports the right Option key going down and up in any
-// app, and the newest open page is told to start and stop recording, as if the key were held there.
+// The talk key: a small macOS helper reports the right Option key going down and up in any app.
+// A tap turns agent mode on or off (LightCraft's toolbar, and the microphone); holding it is talking.
 const TALK_KEY_SOURCE = path.join(ROOT, "tools", "talk-key.swift");
 const TALK_KEY_BIN = path.join(ROOT, "bin", "talk-key");
 const TALK_KEY_HELPER = process.env.TALK_KEY_HELPER; // another program printing the same lines; skips the build
-const pages: ServerResponse[] = []; // open /api/events streams, newest last
+const pages: ServerResponse[] = []; // open /api/events streams
 let talkKey: ChildProcess | null = null;
+
+function broadcast(event: Broadcast): void {
+  for (const page of pages) page.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** The microphone, through ffmpeg, as 16 kHz mono 16-bit samples. Open only while agent mode is on. */
+class Microphone {
+  private child: ChildProcess | null = null;
+  private chunks: Buffer[] = [];
+  private bytes = 0;
+  private odd: Buffer | null = null; // half a sample left over from the last read
+  private recording = false;
+
+  open(): void {
+    if (this.child) return;
+    const args = ["-hide_banner", "-loglevel", "error", ...VOICE_INPUT, "-ac", "1", "-ar", "16000", "-f", "s16le", "-"];
+    const child = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    this.child = child;
+    let complaint = "";
+    child.stderr?.on("data", (data: Buffer) => (complaint = (complaint + data.toString()).slice(-2000)));
+    child.stdout?.on("data", (data: Buffer) => this.take(data));
+    child.on("error", (error) => {
+      const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+      console.error(missing ? "No microphone: ffmpeg was not found. Install it with `brew install ffmpeg`." : `Microphone: ${error.message}`);
+    });
+    child.on("exit", (code) => {
+      if (this.child !== child) return; // closed on purpose
+      this.child = null;
+      if (code) {
+        console.error(
+          `The microphone stopped (${complaint.trim().split("\n").at(-1) ?? `ffmpeg exit ${code}`}). ` +
+            "Allow the app you ran `npm start` from under System Settings > Privacy & Security > Microphone.",
+        );
+      }
+    });
+  }
+
+  close(): void {
+    const child = this.child;
+    this.child = null;
+    child?.kill();
+    this.chunks = [];
+    this.bytes = 0;
+    this.odd = null;
+    this.recording = false;
+  }
+
+  private take(data: Buffer): void {
+    let samples = this.odd ? Buffer.concat([this.odd, data]) : data;
+    this.odd = samples.length % 2 ? samples.subarray(samples.length - 1) : null;
+    if (this.odd) samples = samples.subarray(0, samples.length - 1);
+    if (this.recording && this.bytes >= MAX_UTTERANCE_BYTES) return;
+    this.chunks.push(samples);
+    this.bytes += samples.length;
+    if (!this.recording) this.keep(2 * BYTES_PER_SECOND);
+  }
+
+  /** Forget all but about the last `limit` bytes (whole reads, so samples stay aligned). */
+  private keep(limit: number): void {
+    while (this.chunks.length > 1 && this.bytes - (this.chunks[0]?.length ?? 0) >= limit) {
+      this.bytes -= this.chunks.shift()?.length ?? 0;
+    }
+  }
+
+  /** Start an utterance, keeping `preRollMs` of what was heard just before. */
+  begin(preRollMs: number): void {
+    this.open();
+    this.keep((preRollMs / 1000) * BYTES_PER_SECOND);
+    this.recording = true;
+  }
+
+  /** The utterance as a WAV file. */
+  end(): Buffer {
+    const pcm = Buffer.concat(this.chunks);
+    this.chunks = [];
+    this.bytes = 0;
+    this.recording = false;
+    const header = Buffer.alloc(44);
+    header.write("RIFF", 0);
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write("WAVEfmt ", 8);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20); // PCM
+    header.writeUInt16LE(1, 22); // mono
+    header.writeUInt32LE(16_000, 24);
+    header.writeUInt32LE(BYTES_PER_SECOND, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write("data", 36);
+    header.writeUInt32LE(pcm.length, 40);
+    return Buffer.concat([header, pcm]);
+  }
+}
+
+/** Reads the reply aloud with the system voice (`say`), a sentence at a time as it streams. */
+class Speaker {
+  private queue: string[] = [];
+  private unspoken = "";
+  private child: ChildProcess | null = null;
+
+  /** Queue the finished sentences of streamed text; `all` also queues the unfinished rest. */
+  feed(delta: string, all = false): void {
+    this.unspoken += delta;
+    let cut = all ? this.unspoken.length : 0;
+    if (!all) for (const match of this.unspoken.matchAll(/[.!?:]\s|\n/g)) cut = match.index + match[0].length;
+    const ready = this.unspoken.slice(0, cut).trim();
+    this.unspoken = this.unspoken.slice(cut);
+    if (!/[\p{L}\p{N}]/u.test(ready)) return;
+    this.queue.push(ready);
+    this.next();
+  }
+
+  stop(): void {
+    this.queue = [];
+    this.unspoken = "";
+    this.child?.kill();
+    this.child = null;
+  }
+
+  private next(): void {
+    const text = this.child ? undefined : this.queue.shift();
+    if (text === undefined) return;
+    // The text goes in on stdin, so a reply that starts with "-" is not read as an option.
+    const child = spawn("say", [], { stdio: ["pipe", "ignore", "ignore"] });
+    this.child = child;
+    child.on("error", () => {});
+    child.on("exit", () => {
+      if (this.child === child) this.child = null;
+      this.next();
+    });
+    child.stdin?.end(text);
+  }
+}
+
+const mic = new Microphone();
+const speaker = new Speaker();
+let agentMode = false; // LightCraft's toolbar is up and the microphone is open
+let keyDown = false;
+let holdTimer: NodeJS.Timeout | null = null;
+let talking = false;
+let toolbarWarned = false;
+
+function sound(name: "Tink" | "Pop"): void {
+  execFile("afplay", [`/System/Library/Sounds/${name}.aiff`], () => {});
+}
+
+/** The first transcription after a while takes seconds (the model is read and set up): do it before it matters. */
+function warmUp(): void {
+  const hum = Buffer.alloc(44 + BYTES_PER_SECOND / 2);
+  for (let at = 44; at + 1 < hum.length; at += 2) hum.writeInt16LE(at % 400 < 200 ? 1000 : -1000, at);
+  transcribe(hum).catch(() => {});
+}
+
+/** Run a LightCraft UI command; false when it failed (headless LightCraft has no window to show it in). */
+async function appCommand(command: string, params: object): Promise<boolean> {
+  try {
+    // The compact tool list names the same tool differently.
+    const compact = tools.some((tool) => tool.name === "command_run");
+    const result = compact
+      ? await mcp.callTool("command_run", { id: command, params })
+      : await mcp.callTool("run_command", { command, params });
+    return result.isError !== true;
+  } catch {
+    return false;
+  }
+}
+
+/** What the voice is doing, on the page and on the line under LightCraft's toolbar. */
+function showStatus(state: string, more: { transcript?: string; error?: string } = {}): void {
+  broadcast({ type: "voice", state, agentMode });
+  void appCommand("assistant.status", { status: state, ...more });
+}
+
+async function setAgentMode(on: boolean): Promise<void> {
+  if (agentMode === on) return;
+  agentMode = on;
+  if (on) {
+    mic.open();
+    warmUp();
+  } else {
+    mic.close();
+    speaker.stop();
+    current?.abort();
+    talking = false;
+  }
+  broadcast({ type: "voice", state: on ? READY : "Off", agentMode });
+  const shown = await appCommand("assistant.toggle", { on });
+  if (on && shown) void appCommand("assistant.status", { status: READY });
+  if (on && !shown && !toolbarWarned) {
+    toolbarWarned = true;
+    console.error(
+      "LightCraft did not show its toolbar: open a photo, and run the chat against the app " +
+        "(LIGHTCRAFT_MCP_ARGS=mcp --connect 127.0.0.1:7980 --compact). Voice works without it.",
+    );
+  }
+}
+
+/** The talk key, or the page's button, went down or up. */
+function onTalk(down: boolean): void {
+  if (down === keyDown) return; // the helper and the focused page both report the same press
+  keyDown = down;
+  if (down) {
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      beginTalking();
+    }, HOLD_MS);
+  } else if (holdTimer) {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    void setAgentMode(!agentMode); // a tap
+  } else {
+    void endTalking();
+  }
+}
+
+function beginTalking(): void {
+  talking = true;
+  speaker.stop(); // talking over the reply interrupts it,
+  current?.abort(); // and stops the work behind it
+  mic.begin(HOLD_MS + PRE_ROLL_MS);
+  // You are probably looking at LightCraft: a tick says it is listening, a pop that it stopped.
+  sound("Tink");
+  void setAgentMode(true).then(() => {
+    if (talking) showStatus("Listening…");
+  });
+}
+
+async function endTalking(): Promise<void> {
+  if (!talking) return;
+  talking = false;
+  const wav = mic.end();
+  sound("Pop");
+  if (wav.length - 44 < 0.3 * BYTES_PER_SECOND) return showStatus(READY);
+  showStatus("Transcribing…");
+  let text: string;
+  try {
+    text = await transcribe(wav);
+  } catch (error) {
+    broadcast({ type: "error", message: `Voice: ${describeError(error)}` });
+    return showStatus(READY, { error: describeError(error) });
+  }
+  if (talking || !agentMode) return;
+  if (!text) return showStatus("Didn't catch that. Hold the key and speak");
+  await voiceTurn(text);
+}
+
+/** A spoken message: the same turn a typed one gets, shown on every page and read aloud. */
+async function voiceTurn(text: string): Promise<void> {
+  // A reply that was just interrupted may still be finishing a tool call.
+  for (let tries = 0; busy && tries < 50; tries++) await sleep(300);
+  if (talking || !agentMode) return;
+  if (busy) return showStatus(READY, { error: "The last request is still running. Try again in a moment." });
+  busy = true;
+  const abort = new AbortController();
+  current = abort;
+  broadcast({ type: "user", text });
+  showStatus("Working…", { transcript: text });
+  let said = "";
+  const send = (event: PageEvent): void => {
+    broadcast(event);
+    if (event.type === "text") {
+      said += event.delta;
+      speaker.feed(event.delta);
+    } else if (event.type === "tool_call") {
+      said = "";
+      speaker.feed("", true);
+    }
+  };
+  let failure: string | undefined;
+  try {
+    await runTurn({ text, voice: true }, send, abort.signal);
+    speaker.feed("", true);
+  } catch (error) {
+    if (!(error instanceof Anthropic.APIUserAbortError)) {
+      failure = describeError(error);
+      send({ type: "error", message: failure });
+    }
+  } finally {
+    busy = false;
+    if (current === abort) current = null;
+    broadcast({ type: "done" });
+    if (agentMode && !talking) showStatus(READY, { transcript: said.trim() || text, error: failure });
+  }
+}
 
 function run(command: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -255,22 +556,14 @@ function run(command: string, args: string[]): Promise<void> {
 
 function onTalkKey(line: string): void {
   if (line === "ready") {
-    console.log("Global talk key: hold the right Option key in any app, speak, and let go.");
+    console.log("Talk key: tap the right Option key for agent mode; hold it, speak, and let go.");
   } else if (line === "denied") {
     console.error(
-      "Global talk key is off: macOS has not allowed key monitoring. Turn on the app you ran `npm start` from " +
-        "under System Settings > Privacy & Security > Input Monitoring, then restart. The key still works on the page.",
+      "The talk key is off: macOS has not allowed key monitoring. Turn on the app you ran `npm start` from " +
+        "under System Settings > Privacy & Security > Input Monitoring, then restart. It still works on the chat page.",
     );
   } else if (line === "down" || line === "up") {
-    const page = pages.at(-1);
-    if (!page) {
-      if (line === "down") console.log(`Talk key pressed, but no chat page is open: http://localhost:${PORT}`);
-      return;
-    }
-    page.write(`data: ${JSON.stringify({ type: "talk", down: line === "down" })}\n\n`);
-    // You are probably looking at LightCraft, not the page: a tick says it is listening, a pop that it stopped.
-    const sound = line === "down" ? "Tink" : "Pop";
-    execFile("afplay", [`/System/Library/Sounds/${sound}.aiff`], () => {});
+    onTalk(line === "down");
   }
 }
 
@@ -386,6 +679,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   const send = (event: PageEvent): void => void res.write(`data: ${JSON.stringify(event)}\n\n`);
   const abort = new AbortController();
+  current = abort;
   res.on("close", () => abort.abort());
   try {
     await runTurn(request, send, abort.signal);
@@ -393,6 +687,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
     if (!(error instanceof Anthropic.APIUserAbortError)) send({ type: "error", message: describeError(error) });
   } finally {
     busy = false;
+    if (current === abort) current = null;
     send({ type: "done" });
     res.end();
   }
@@ -408,16 +703,20 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   } else if (req.method === "GET" && url.pathname === "/api/events") {
     handleEvents(res);
   } else if (req.method === "GET" && url.pathname === "/api/state") {
-    json(res, 200, { model: MODEL, tools: tools.map((tool) => tool.name), preview: await currentPreview() });
+    json(res, 200, { model: MODEL, tools: tools.map((tool) => tool.name), preview: await currentPreview(), agentMode });
   } else if (req.method === "POST" && url.pathname === "/api/chat") {
     if (!req.headers["content-type"]?.startsWith("application/json")) {
       return json(res, 415, { error: "send application/json" });
     }
     await handleChat(req, res);
-  } else if (req.method === "POST" && url.pathname === "/api/transcribe") {
-    if (!req.headers["content-type"]?.startsWith("audio/wav")) return json(res, 415, { error: "send audio/wav" });
-    const wav = await readBody(req, MAX_AUDIO_BYTES, "The recording is too long.");
-    json(res, 200, { text: await transcribe(wav) });
+  } else if (req.method === "POST" && url.pathname === "/api/talk") {
+    // The page's Talk button and its own key handler: the same as the talk key.
+    onTalk((await readJson(req) as { down?: boolean }).down === true);
+    json(res, 200, { agentMode });
+  } else if (req.method === "POST" && url.pathname === "/api/stop") {
+    speaker.stop();
+    current?.abort();
+    json(res, 200, {});
   } else if (req.method === "POST" && url.pathname === "/api/reset") {
     if (busy) return json(res, 409, { error: "A reply is still in progress." });
     messages = [];
@@ -449,6 +748,8 @@ createServer((req, res) => {
 
 process.on("SIGINT", () => {
   talkKey?.kill();
+  mic.close();
+  speaker.stop();
   mcp.close();
   process.exit(0);
 });
