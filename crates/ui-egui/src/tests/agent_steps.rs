@@ -47,7 +47,8 @@ fn exposure(h: &Headless) -> f64 {
 
 /// The demo library in Detail with the Edit panel's Light section open.
 fn detail() -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.assistant.step_bar = true;
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let id = h.app.session.visible_cloned()[0].0;
     ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [id]}}));

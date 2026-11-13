@@ -297,3 +297,71 @@ fn voice_receives_cropped_editor_images_and_discards_photo_switch_captures() {
     assert!(stop.load(Ordering::Acquire));
     assert!(!input.try_iter().any(|event| matches!(event, VoiceInput::Frame { .. })));
 }
+
+/// One agent tool call, as the MCP server brackets it.
+fn agent_call(h: &mut Headless, commands: &[(&str, Value)]) {
+    h.app.run("agent.step.begin", json!({"tool": "set_develop"})).unwrap();
+    for (id, p) in commands {
+        h.app.run(id, p.clone()).unwrap();
+    }
+    h.app.run("agent.step.end", json!({})).unwrap();
+}
+
+#[test]
+fn an_agent_step_is_replayed_on_its_sliders_without_editing_the_photo() {
+    let (_fixture, mut h) = demo();
+    h.app.ui.view = ViewMode::Detail;
+    h.step();
+    let id = h.app.session.active().unwrap();
+    let exposure = |h: &Headless| controls::get(&h.app.session.develop_of(id).unwrap(), "light.exposure").unwrap();
+    agent_call(
+        &mut h,
+        &[("develop.set", json!({"control": "light.exposure", "value": 0.8})), ("develop.set", json!({"control": "effects.dehaze", "value": 30.0}))],
+    );
+    let undo = h.app.session.undo.len();
+    let revision = h.app.session.catalog.revision;
+
+    let (mut travelled, mut waited, mut frames) = (false, false, 0);
+    h.step();
+    assert!(replay_running(&h.app), "the step starts a replay");
+    while replay_running(&h.app) && frames < 2000 {
+        if let Some(shown) = replay_value(&h.app, "light.exposure") {
+            travelled |= shown > 0.05 && shown < 0.75;
+            // the slider after it waits at its old value for its turn
+            waited |= replay_value(&h.app, "effects.dehaze") == Some(0.0);
+        }
+        assert_eq!(exposure(&h), 0.8, "the photo keeps the value the agent set");
+        h.step();
+        frames += 1;
+    }
+    assert!(!replay_running(&h.app), "the replay ends by itself");
+    assert!(travelled && waited, "the slider is drawn travelling, one slider at a time");
+    assert_eq!(replay_value(&h.app, "light.exposure"), None);
+    assert_eq!(h.app.session.undo.len(), undo, "a replay adds no undo step");
+    assert_eq!(h.app.session.catalog.revision, revision, "a replay edits nothing");
+    assert!(h.app.ui.section_open("effects"), "the section of the slider on show is opened");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "agent:bar"), "the step bar stays hidden");
+
+    // the person's own edit is not a step, and an edit during a replay ends it
+    agent_call(&mut h, &[("develop.set", json!({"control": "light.contrast", "value": 20.0}))]);
+    h.step();
+    assert!(replay_running(&h.app));
+    h.app.run("develop.set", json!({"control": "light.contrast", "value": 5.0})).unwrap();
+    h.step();
+    assert!(!replay_running(&h.app), "the values it was showing are stale");
+}
+
+#[test]
+fn an_outside_voice_opens_the_workspace_and_reports_its_status() {
+    let (_fixture, mut h) = demo();
+    request(&mut h, "assistant.toggle", json!({"on": true}));
+    assert!(h.app.assistant.expanded);
+    request(&mut h, "assistant.toggle", json!({"on": true}));
+    assert!(h.app.assistant.expanded, "asking for the state it has changes nothing");
+    assert!(h.app.assistant.error.is_none(), "no voice transport in the app is not an error: {:?}", h.app.assistant.error);
+    request(&mut h, "assistant.status", json!({"status": "Listening", "transcript": "warm it up a little"}));
+    assert_eq!(h.app.assistant.status, "Listening");
+    assert_eq!(h.app.assistant.transcript, "warm it up a little");
+    request(&mut h, "assistant.toggle", json!({"on": false}));
+    assert!(!h.app.assistant.expanded);
+}

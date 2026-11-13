@@ -1096,7 +1096,7 @@ fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter,
         draw_focus_point(&p.with_clip_rect(img_rect.intersect(canvas)), img_rect, o.photo, "canvas:focusPoint");
     }
     transform_grid(app, p, img_rect);
-    if !o.fullscreen {
+    if !o.fullscreen && app.assistant.step_bar {
         agent::show(app, ui, o.map, canvas, img_rect);
     }
 }

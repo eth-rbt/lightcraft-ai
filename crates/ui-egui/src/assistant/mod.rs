@@ -89,6 +89,43 @@ struct Edit {
     last: f64,
 }
 
+/// An agent step shown again on the real sliders. The step's edit has already been applied (it
+/// came through MCP or the control channel), so this changes nothing: each slider the step moved
+/// is highlighted in turn and drawn travelling from its old value to the one it now has.
+struct Replay {
+    photo: (u64, u64),
+    /// Catalog revision when the replay started: any edit since makes its values stale.
+    catalog_revision: u64,
+    /// Control id, the value before the step and the value after.
+    items: Vec<(String, f64, f64)>,
+    /// Seconds each slider takes.
+    per: f64,
+    elapsed: f64,
+    last: f64,
+    /// The item whose Edit section was last opened, so a section the user folds stays folded.
+    opened: Option<usize>,
+}
+
+/// Sliders one replay shows; a step that moved more shows the first ones in panel order.
+const REPLAY_CONTROLS: usize = 8;
+/// A replay of several sliders shortens each so the whole takes about this long (seconds).
+const REPLAY_TOTAL: f64 = 3.6;
+
+/// The Edit panel section that draws a control's slider, for the sections that can be opened by id.
+fn section_id(section: lightcraft_develop::Section) -> Option<&'static str> {
+    use lightcraft_develop::Section;
+    Some(match section {
+        Section::Light => "light",
+        Section::Color => "color",
+        Section::Effects | Section::Vignette | Section::Grain => "effects",
+        Section::Detail => "detail",
+        Section::Optics => "optics",
+        Section::LensBlur => "lensBlur",
+        Section::Calibration => "calibration",
+        _ => return None,
+    })
+}
+
 /// Session-local ink is keyed by both library generation and photo id. Nothing is written to
 /// originals, exported photos, or the user's normal develop undo history by drawing.
 pub struct Workspace {
@@ -109,6 +146,12 @@ pub struct Workspace {
     pub editor_rect: Option<Rect>,
     pub photo_rect: Option<Rect>,
     pub voice: Option<VoiceConnection>,
+    /// Show the agent step bar (Back / Advance and the step's marks) over the photo. Off: a step
+    /// is replayed on the sliders instead and leaves only its marks in the Edit panel.
+    pub step_bar: bool,
+    replay: Option<Replay>,
+    /// The newest agent step already replayed or passed over.
+    seen_step: u64,
     voice_wanted: bool,
     attempted: bool,
     edit: Option<Edit>,
@@ -139,6 +182,9 @@ impl Default for Workspace {
             editor_rect: None,
             photo_rect: None,
             voice: None,
+            step_bar: false,
+            replay: None,
+            seen_step: 0,
             voice_wanted: false,
             attempted: false,
             edit: None,
@@ -243,7 +289,9 @@ fn start_voice(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.assistant.attempted = true;
     let Some(start) = &app.services.start_voice else {
-        app.assistant.error = Some("Voice is available in the Windows desktop app. Drawing still works here.".into());
+        // No voice transport in this build: voice comes from tools/lightcraft-chat, which listens
+        // for the talk key itself and reports here through `assistant.status`.
+        app.assistant.status = "Hold right Option to talk".into();
         return;
     };
     match start(ctx.clone()) {
@@ -266,6 +314,9 @@ fn start_voice(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
     match id {
+        // `on` asks for a state instead of the other one, so a caller that cannot see the window
+        // (the talk key of tools/lightcraft-chat) can open the workspace without closing it.
+        "assistant.toggle" if p.get("on").and_then(Value::as_bool) == Some(app.assistant.expanded) => {}
         "assistant.toggle" => {
             if app.assistant.expanded {
                 stop_voice(app);
@@ -324,6 +375,17 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
                 _ => ink.clear(),
             }
             app.assistant.changed();
+        }
+        // What an outside voice (tools/lightcraft-chat) is doing, for the line under the toolbar.
+        "assistant.status" => {
+            let text = |key: &str, max: usize| p.get(key).and_then(Value::as_str).map(|t| t.chars().take(max).collect::<String>());
+            if let Some(status) = text("status", 80) {
+                app.assistant.status = status;
+            }
+            if let Some(transcript) = text("transcript", 600) {
+                app.assistant.transcript = transcript;
+            }
+            app.assistant.error = text("error", 300).filter(|e| !e.is_empty());
         }
         "assistant.stop" => {
             // Closing the transport cancels any server response as well as the local animation.
@@ -460,6 +522,94 @@ fn advance_edit(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
+/// Start replaying the newest agent step when it edited the photo on show.
+fn begin_replay(app: &mut LightcraftApp, now: f64) {
+    let seen = app.assistant.seen_step;
+    let Some(newest) = app.session.agent.steps().last().map(|s| s.id).filter(|id| *id > seen) else { return };
+    app.assistant.seen_step = newest;
+    let Some(photo) = identity(app) else { return };
+    if app.ui.view != ViewMode::Detail || app.ui.fullscreen || blocked(app) || app.assistant.edit.is_some() {
+        return;
+    }
+    let Some(step) = app.session.agent.steps().iter().rev().find(|s| s.id > seen && s.photo.0 == photo.1) else { return };
+    let items: Vec<(String, f64, f64)> = step
+        .control_changes()
+        .into_iter()
+        .filter(|c| controls::find(&c.id).is_some_and(|spec| section_id(spec.section).is_some()))
+        .take(REPLAY_CONTROLS)
+        .map(|c| (c.id, c.from, c.to))
+        .collect();
+    if items.is_empty() {
+        return;
+    }
+    let per = (REPLAY_TOTAL / items.len() as f64).clamp(0.5, 1.2);
+    let catalog_revision = app.session.catalog.revision;
+    app.assistant.replay = Some(Replay { photo, catalog_revision, items, per, elapsed: 0.0, last: now, opened: None });
+}
+
+fn advance_replay(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some(mut replay) = app.assistant.replay.take() else { return };
+    let stale = identity(app) != Some(replay.photo)
+        || app.session.catalog.revision != replay.catalog_revision
+        || app.ui.view != ViewMode::Detail
+        || blocked(app);
+    if stale {
+        return;
+    }
+    let now = ctx.input(|i| i.time);
+    replay.elapsed += (now - replay.last).clamp(0.0, 0.08);
+    replay.last = now;
+    let index = (replay.elapsed / replay.per) as usize;
+    let Some((control, from, to)) = replay.items.get(index) else {
+        app.assistant.action.clear();
+        return;
+    };
+    if replay.opened != Some(index) {
+        replay.opened = Some(index);
+        if let Some(spec) = controls::find(control) {
+            app.assistant.action = format!("{}  {} → {}", spec.label, spec.format(*from), spec.format(*to));
+            if app.ui.right != RightPanel::Edit || !crate::docking::exposed(app, crate::docking::Panel::Tools) {
+                let _ = app.run("panel.edit", json!({}));
+            }
+            app.ui.right = RightPanel::Edit;
+            if let Some(section) = section_id(spec.section)
+                && !app.ui.section_open(section)
+            {
+                app.ui.toggle_section(section);
+            }
+        }
+    }
+    app.assistant.replay = Some(replay);
+    ctx.request_repaint();
+}
+
+/// The control a replay is showing now, and how far along its travel it is (0..1, eased).
+fn replaying(app: &LightcraftApp) -> Option<(usize, f64)> {
+    let replay = app.assistant.replay.as_ref()?;
+    let index = (replay.elapsed / replay.per) as usize;
+    let t = (replay.elapsed / replay.per - index as f64).clamp(0.0, 1.0);
+    (index < replay.items.len()).then_some((index, t * t * (3.0 - 2.0 * t)))
+}
+
+/// The value slider `control` shows during a replay: travelling for the one on show, still at
+/// its old value for the ones whose turn has not come. `None`: draw the real value.
+pub fn replay_value(app: &LightcraftApp, control: &str) -> Option<f64> {
+    let (index, t) = replaying(app)?;
+    let items = &app.assistant.replay.as_ref()?.items;
+    let at = items.iter().position(|(id, ..)| id == control)?;
+    let (_, from, to) = items.get(at)?;
+    match at.cmp(&index) {
+        std::cmp::Ordering::Less => None,
+        std::cmp::Ordering::Equal => Some(from + (to - from) * t),
+        std::cmp::Ordering::Greater => Some(*from),
+    }
+}
+
+/// A replay is running (tests and the control channel's idle check).
+pub fn replay_running(app: &LightcraftApp) -> bool {
+    app.assistant.replay.is_some()
+}
+
 /// Run once per visible frame before keyboard processing. No microphone starts on app launch.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let photo = identity(app);
@@ -531,8 +681,9 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.assistant.voice.as_ref().is_some_and(|v| v.stop.load(Ordering::Acquire)) {
         stop_voice(app);
     }
+    begin_replay(app, ctx.input(|i| i.time));
     // Physical interaction wins over an assistant adjustment immediately.
-    if app.assistant.edit.is_some()
+    if (app.assistant.edit.is_some() || app.assistant.replay.is_some())
         && ctx.input(|i| {
             i.pointer.any_pressed()
                 || i.events.iter().any(|event| {
@@ -543,9 +694,13 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
                 })
         })
     {
-        interrupt(app);
+        app.assistant.replay = None;
+        if app.assistant.edit.is_some() {
+            interrupt(app);
+        }
     }
     advance_edit(app, ctx);
+    advance_replay(app, ctx);
     if app.assistant.voice.is_some() {
         ctx.request_repaint_after(std::time::Duration::from_millis(40));
     }
@@ -578,7 +733,10 @@ pub fn show_control(app: &LightcraftApp, ui: &mut egui::Ui, control: &str, row: 
         "wb.tintRel" => "wb.tint",
         other => other,
     };
-    if app.assistant.edit.as_ref().is_some_and(|edit| edit.control == shown) {
+    let replayed = replaying(app)
+        .and_then(|(index, _)| app.assistant.replay.as_ref()?.items.get(index))
+        .is_some_and(|(id, ..)| id == shown);
+    if replayed || app.assistant.edit.as_ref().is_some_and(|edit| edit.control == shown) {
         ui.scroll_to_rect(row, Some(egui::Align::Center));
         ui.painter().rect_stroke(row.shrink(3.0), 4.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(57, 123, 119)), egui::StrokeKind::Inside);
     }

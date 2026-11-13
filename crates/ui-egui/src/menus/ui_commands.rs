@@ -66,6 +66,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("assistant.clear", "Clear Photo Annotations", None, ""),
     ("assistant.send", "Send Assistant Feedback", None, ""),
     ("assistant.stop", "Stop Assistant", None, ""),
+    ("assistant.status", "Show Assistant Status", None, ""),
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
     ("view.photoGrid", "Photo Grid", None, "View"),

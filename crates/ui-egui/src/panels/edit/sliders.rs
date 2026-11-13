@@ -32,6 +32,8 @@ pub(crate) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
 
 pub(super) fn visible_slider(app: &LightcraftApp, ui: &mut egui::Ui, spec: &ControlSpec, value: f64, enabled: bool) -> SliderOut {
     let before = ui.cursor().top();
+    // an agent step being replayed draws its travelling value; the photo's own is untouched
+    let value = crate::assistant::replay_value(app, spec.id).unwrap_or(value);
     let out = slider(ui, spec, value, enabled, None);
     let row = egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), before), egui::pos2(ui.max_rect().right(), ui.cursor().top()));
     crate::assistant::show_control(app, ui, spec.id, row);
